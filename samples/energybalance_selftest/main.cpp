@@ -1,13 +1,20 @@
 #include "EnergyBalanceModel.h"
+#include <Kokkos_Core.hpp>
 
 using namespace helios;
 
 int main(){
 
+    Kokkos::initialize();
+
     Context context;
 
     EnergyBalanceModel energybalance( &context );
 
-    return energybalance.selfTest();
+    int result = energybalance.selfTest();
+
+    Kokkos::finalize();
+
+    return result;
 
 }

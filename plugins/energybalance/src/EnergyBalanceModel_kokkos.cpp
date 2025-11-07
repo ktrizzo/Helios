@@ -367,53 +367,74 @@ void EnergyBalanceModel::run( const std::vector<uint> &UUIDs, float dt ){
     Kokkos::deep_copy(d_heatcapacity, h_heatcapacity);
     Kokkos::deep_copy(d_surfacehumidity, h_surfacehumidity);
 
-    // Launch Kokkos kernel
-    Kokkos::parallel_for("solveEnergyBalance", Nprimitives, KOKKOS_LAMBDA(const uint p) {
-        float T;
+    // Define functor for energy balance solve
+    struct EnergyBalanceSolver {
+        Kokkos::View<float*> To, R, Qother, eps, Ta, ea, pressure, gH, gS, stomatal_sidedness, heatcapacity, surfacehumidity, T;
+        Kokkos::View<uint*> Nsides;
+        float dt;
 
-        float err_max = 0.0001;
-        uint max_iter = 100;
+        EnergyBalanceSolver(Kokkos::View<float*> To_, Kokkos::View<float*> R_, Kokkos::View<float*> Qother_,
+                           Kokkos::View<float*> eps_, Kokkos::View<float*> Ta_, Kokkos::View<float*> ea_,
+                           Kokkos::View<float*> pressure_, Kokkos::View<float*> gH_, Kokkos::View<float*> gS_,
+                           Kokkos::View<uint*> Nsides_, Kokkos::View<float*> stomatal_sidedness_,
+                           Kokkos::View<float*> heatcapacity_, Kokkos::View<float*> surfacehumidity_,
+                           Kokkos::View<float*> T_, float dt_)
+            : To(To_), R(R_), Qother(Qother_), eps(eps_), Ta(Ta_), ea(ea_), pressure(pressure_),
+              gH(gH_), gS(gS_), Nsides(Nsides_), stomatal_sidedness(stomatal_sidedness_),
+              heatcapacity(heatcapacity_), surfacehumidity(surfacehumidity_), T(T_), dt(dt_) {}
 
-        float T_old_old = d_To(p);
+        KOKKOS_INLINE_FUNCTION
+        void operator()(const uint p) const {
+            float Tval;
 
-        float T_old = T_old_old;
-        T_old_old = 400.f;
+            float err_max = 0.0001;
+            uint max_iter = 100;
 
-        float resid_old = evaluateEnergyBalance(T_old,d_R(p),d_Qother(p),d_eps(p),d_Ta(p),d_ea(p),d_pressure(p),d_gH(p),d_gS(p),d_Nsides(p),d_stomatal_sidedness(p),d_heatcapacity(p),d_surfacehumidity(p),dt,d_To(p));
-        float resid_old_old = evaluateEnergyBalance(T_old_old,d_R(p),d_Qother(p),d_eps(p),d_Ta(p),d_ea(p),d_pressure(p),d_gH(p),d_gS(p),d_Nsides(p),d_stomatal_sidedness(p),d_heatcapacity(p),d_surfacehumidity(p),dt,d_To(p));
+            float T_old_old = To(p);
 
-        float resid = 100;
-        float err = resid;
-        uint iter = 0;
-        while( err>err_max && iter<max_iter ){
+            float T_old = T_old_old;
+            T_old_old = 400.f;
 
-            if( resid_old==resid_old_old ){//this condition will cause NaN
-                err=0;
-                break;
+            float resid_old = evaluateEnergyBalance(T_old,R(p),Qother(p),eps(p),Ta(p),ea(p),pressure(p),gH(p),gS(p),Nsides(p),stomatal_sidedness(p),heatcapacity(p),surfacehumidity(p),dt,To(p));
+            float resid_old_old = evaluateEnergyBalance(T_old_old,R(p),Qother(p),eps(p),Ta(p),ea(p),pressure(p),gH(p),gS(p),Nsides(p),stomatal_sidedness(p),heatcapacity(p),surfacehumidity(p),dt,To(p));
+
+            float resid = 100;
+            float err = resid;
+            uint iter = 0;
+            while( err>err_max && iter<max_iter ){
+
+                if( resid_old==resid_old_old ){//this condition will cause NaN
+                    err=0;
+                    break;
+                }
+
+                Tval = Kokkos::fabs((T_old_old*resid_old-T_old*resid_old_old)/(resid_old-resid_old_old));
+
+                resid = evaluateEnergyBalance(Tval,R(p),Qother(p),eps(p),Ta(p),ea(p),pressure(p),gH(p),gS(p),Nsides(p),stomatal_sidedness(p),heatcapacity(p),surfacehumidity(p),dt,To(p));
+
+                resid_old_old = resid_old;
+                resid_old = resid;
+
+                err = Kokkos::fabs(T_old-T_old_old)/Kokkos::fabs(T_old_old);
+
+                T_old_old = T_old;
+                T_old = Tval;
+
+                iter++;
+
             }
 
-            T = Kokkos::fabs((T_old_old*resid_old-T_old*resid_old_old)/(resid_old-resid_old_old));
+            if( err>err_max ){
+                Kokkos::printf("WARNING (EnergyBalanceModel::solveEnergyBalance): Energy balance did not converge.\n");
+            }
 
-            resid = evaluateEnergyBalance(T,d_R(p),d_Qother(p),d_eps(p),d_Ta(p),d_ea(p),d_pressure(p),d_gH(p),d_gS(p),d_Nsides(p),d_stomatal_sidedness(p),d_heatcapacity(p),d_surfacehumidity(p),dt,d_To(p));
-
-            resid_old_old = resid_old;
-            resid_old = resid;
-
-            err = Kokkos::fabs(T_old-T_old_old)/Kokkos::fabs(T_old_old);
-
-            T_old_old = T_old;
-            T_old = T;
-
-            iter++;
-
+            T(p) = Tval;
         }
+    };
 
-        if( err>err_max ){
-            Kokkos::printf("WARNING (EnergyBalanceModel::solveEnergyBalance): Energy balance did not converge.\n");
-        }
-
-        d_T(p) = T;
-    });
+    // Launch Kokkos kernel
+    EnergyBalanceSolver solver(d_To, d_R, d_Qother, d_eps, d_Ta, d_ea, d_pressure, d_gH, d_gS, d_Nsides, d_stomatal_sidedness, d_heatcapacity, d_surfacehumidity, d_T, dt);
+    Kokkos::parallel_for("solveEnergyBalance", Kokkos::RangePolicy<>(0, Nprimitives), solver);
 
     // Copy results back to host
     auto h_T = Kokkos::create_mirror_view(d_T);
