@@ -340,6 +340,9 @@ struct ScatteringFunctor {
     uint Nrays_per_prim;
     RandomGenerator rng;
     uint64_t seed_offset;
+    Kokkos::View<int*> hit_count;
+    Kokkos::View<int*> ray_count;
+    Kokkos::View<int*> hits_from_prim;
 
     ScatteringFunctor(Kokkos::View<PrimitiveData*> prims,
                      Kokkos::View<float*> flux_i,
@@ -347,9 +350,12 @@ struct ScatteringFunctor {
                      uint Nprims,
                      uint Nrays,
                      const RandomGenerator& random,
-                     uint64_t offset)
+                     uint64_t offset,
+                     Kokkos::View<int*> hits,
+                     Kokkos::View<int*> rays,
+                     Kokkos::View<int*> hits_per_src)
         : primitives(prims), flux_in(flux_i), flux_out(flux_o),
-          Nprimitives(Nprims), Nrays_per_prim(Nrays), rng(random), seed_offset(offset) {}
+          Nprimitives(Nprims), Nrays_per_prim(Nrays), rng(random), seed_offset(offset), hit_count(hits), ray_count(rays), hits_from_prim(hits_per_src) {}
 
     KOKKOS_INLINE_FUNCTION
     void operator()(const uint ray_idx) const {
@@ -359,6 +365,7 @@ struct ScatteringFunctor {
         if (prim_id >= Nprimitives) return;
 
         const PrimitiveData& prim = primitives(prim_id);
+        Kokkos::atomic_add(&ray_count(prim_id), 1);
 
         // Get absorbed flux and convert to total incident flux
         float absorbed_flux = flux_in(prim_id);
@@ -480,6 +487,8 @@ struct ScatteringFunctor {
         if (hit_prim_id >= 0) {
             float contribution = to_scatter / float(Nrays_per_prim);
             Kokkos::atomic_add(&flux_out(hit_prim_id), contribution);
+            Kokkos::atomic_add(&hit_count(0), 1);
+            Kokkos::atomic_add(&hits_from_prim(prim_id), 1);
         }
 
         rng.pool.free_state(generator);
@@ -679,17 +688,32 @@ void RadiationModel::runBand_kokkos(const std::string &label) {
             std::cout << "Running scattering with depth=" << band.scatteringDepth << std::endl;
         }
         Kokkos::View<float*> d_flux_scatter("flux_scatter", Nprimitives);
+        Kokkos::View<int*> d_hit_count("hit_count", 1);
+        Kokkos::View<int*> d_ray_count("ray_count", Nprimitives);
+        Kokkos::View<int*> d_hits_from_prim("hits_from_prim", Nprimitives);
 
         for (uint iter = 0; iter < band.scatteringDepth; iter++) {
             Kokkos::deep_copy(d_flux_scatter, 0.0f);
+            Kokkos::deep_copy(d_hit_count, 0);
+            Kokkos::deep_copy(d_ray_count, 0);
+            Kokkos::deep_copy(d_hits_from_prim, 0);
 
             uint Nrays_total = Nprimitives * band.diffuseRayCount;
             if (message_flag) {
                 std::cout << "  Scattering iteration " << iter << ": launching " << Nrays_total << " rays" << std::endl;
+                // Debug: check input flux values and primitive properties
+                auto h_flux_in = Kokkos::create_mirror_view(d_flux);
+                Kokkos::deep_copy(h_flux_in, d_flux);
+                auto h_prims = Kokkos::create_mirror_view(d_primitives);
+                Kokkos::deep_copy(h_prims, d_primitives);
+                for (size_t i = 0; i < Nprimitives; i++) {
+                    std::cout << "    prim[" << i << "]: flux=" << h_flux_in(i)
+                              << ", rho=" << h_prims(i).rho << ", tau=" << h_prims(i).tau << std::endl;
+                }
             }
             ScatteringFunctor scatter_functor(d_primitives, d_flux, d_flux_scatter,
                                              Nprimitives, band.diffuseRayCount, rng,
-                                             Nrays_total * (iter + 10));
+                                             Nrays_total * (iter + 10), d_hit_count, d_ray_count, d_hits_from_prim);
             Kokkos::parallel_for("Scattering", Nrays_total, scatter_functor);
             Kokkos::fence();
 
@@ -702,11 +726,29 @@ void RadiationModel::runBand_kokkos(const std::string &label) {
             if (message_flag) {
                 auto h_scatter = Kokkos::create_mirror_view(d_flux_scatter);
                 Kokkos::deep_copy(h_scatter, d_flux_scatter);
+                auto h_hit_count = Kokkos::create_mirror_view(d_hit_count);
+                Kokkos::deep_copy(h_hit_count, d_hit_count);
+                auto h_ray_count = Kokkos::create_mirror_view(d_ray_count);
+                Kokkos::deep_copy(h_ray_count, d_ray_count);
                 float total_scatter = 0;
                 for (size_t i = 0; i < Nprimitives; i++) {
                     total_scatter += h_scatter(i);
                 }
-                std::cout << "    Total scattered flux: " << total_scatter << std::endl;
+                auto h_hits_from = Kokkos::create_mirror_view(d_hits_from_prim);
+                Kokkos::deep_copy(h_hits_from, d_hits_from_prim);
+                std::cout << "    Total scattered flux: " << total_scatter << " (hits: " << h_hit_count(0) << ")" << std::endl;
+                std::cout << "    Rays per primitive: [";
+                for (size_t i = 0; i < Nprimitives; i++) {
+                    std::cout << h_ray_count(i);
+                    if (i < Nprimitives - 1) std::cout << ", ";
+                }
+                std::cout << "]" << std::endl;
+                std::cout << "    Hits from primitive: [";
+                for (size_t i = 0; i < Nprimitives; i++) {
+                    std::cout << h_hits_from(i);
+                    if (i < Nprimitives - 1) std::cout << ", ";
+                }
+                std::cout << "]" << std::endl;
             }
         }
     }
