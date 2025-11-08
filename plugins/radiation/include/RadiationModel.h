@@ -19,13 +19,20 @@
 #include "Context.h"
 #include "CameraCalibration.h"
 
+#include <utility>
+
+//Conditional backend includes
+#ifdef HELIOS_USE_OPTIX
 //NVIDIA OptiX Includes
 #include <optix.h>
 #include <optixu/optixu_vector_types.h>
 #include <optixu/optixu_vector_functions.h>
 #include <optixu/optixpp_namespace.h>
+#endif
 
-#include <utility>
+#ifdef HELIOS_USE_KOKKOS
+// Kokkos will be included in the implementation file
+#endif
 
 //! Properties defining a radiation camera
 struct CameraProperties{
@@ -1068,6 +1075,7 @@ protected:
 
     std::vector<RadiationSource> radiation_sources;
 
+#ifdef HELIOS_USE_OPTIX
     //! Number of external radiation sources
     RTvariable Nsources_RTvariable;
 
@@ -1162,8 +1170,24 @@ protected:
 
     // --- Functions --- //
 
+#ifdef HELIOS_USE_OPTIX
     //! Creates OptiX context and creates all associated variables, buffers, geometry, acceleration structures, etc. needed for radiation ray tracing.
     void initializeOptiX();
+#endif
+
+#ifdef HELIOS_USE_KOKKOS
+    //! Creates Kokkos-based radiation transport
+    void initializeKokkos();
+
+    //! Updates geometry for Kokkos radiation model
+    void updateGeometry_kokkos();
+
+    //! Run radiation band using Kokkos (single band)
+    void runBand_kokkos(const std::string &label);
+
+    //! Run radiation bands using Kokkos (multiple bands)
+    void runBand_kokkos(const std::vector<std::string> &labels);
+#endif
 
     //! Sets radiative properties for all primitives
     /** This function should be called anytime primitive radiative properties are modified. If radiative properties were not set in the Context, default radiative properties will be applied (black body).
@@ -1180,6 +1204,7 @@ protected:
 
     ///void updateFluxesFromSpectra( uint SourceID );
 
+#ifdef HELIOS_USE_OPTIX
     //! Get 1D array of data for an OptiX buffer of floats
     /**
         \param[in] "buffer" OptiX buffer object corresponding to 1D array of data
@@ -1348,6 +1373,7 @@ protected:
     */
     template <typename anytype>
     void initializeBuffer3D(RTbuffer &buffer, const std::vector<std::vector<std::vector<anytype>>> &array );
+#endif // HELIOS_USE_OPTIX
 
     void buildLightModelGeometry( uint sourceID );
 
@@ -1633,6 +1659,7 @@ protected:
     RTvariable      top_object;
     RTacceleration  geometry_acceleration;
 
+#endif // HELIOS_USE_OPTIX
 
     //! Flag indicating whether geometry has been built
     /**

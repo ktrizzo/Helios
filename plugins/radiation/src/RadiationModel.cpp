@@ -43,12 +43,22 @@ RadiationModel::RadiationModel( helios::Context* context_a ){
     spectral_library_files.push_back("plugins/radiation/spectral_data/color_board/Calibrite_ColorChecker_Classic_colorboard.xml");
     spectral_library_files.push_back("plugins/radiation/spectral_data/color_board/DGK_DKK_colorboard.xml");
 
+#ifdef HELIOS_USE_OPTIX
     initializeOptiX();
+#elif defined(HELIOS_USE_KOKKOS)
+    initializeKokkos();
+#else
+    #error "Either HELIOS_USE_OPTIX or HELIOS_USE_KOKKOS must be defined"
+#endif
 
 }
 
 RadiationModel::~RadiationModel(){
+#ifdef HELIOS_USE_OPTIX
     RT_CHECK_ERROR( rtContextDestroy( OptiX_Context ) );
+#elif defined(HELIOS_USE_KOKKOS)
+    // Kokkos cleanup handled by main()
+#endif
 }
 
 void RadiationModel::disableMessages() {
@@ -1973,6 +1983,12 @@ void RadiationModel::updateGeometry() {
 
 void RadiationModel::updateGeometry( const std::vector<uint>& UUIDs ){
 
+#ifdef HELIOS_USE_KOKKOS
+    // Use Kokkos version
+    updateGeometry_kokkos();
+    return;
+#endif
+
     if( message_flag ){
         std::cout << "Updating geometry in radiation transport model..." << std::flush;
     }
@@ -3105,6 +3121,12 @@ void RadiationModel::runBand( const std::string &label ) {
 }
 
 void RadiationModel::runBand( const std::vector<std::string> &label ) {
+
+#ifdef HELIOS_USE_KOKKOS
+    // Use Kokkos version
+    runBand_kokkos(label);
+    return;
+#endif
 
     //----- VERIFICATIONS -----//
 
