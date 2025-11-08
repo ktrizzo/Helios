@@ -102,7 +102,9 @@ struct DirectRaysFunctor {
                           u*v*prim.vertices[2].y + (1-u)*v*prim.vertices[3].y;
             ray_origin.z = (1-u)*(1-v)*prim.vertices[0].z + u*(1-v)*prim.vertices[1].z +
                           u*v*prim.vertices[2].z + (1-u)*v*prim.vertices[3].z;
-            normal = calculateSurfaceNormal(prim.vertices[0], prim.vertices[1], prim.vertices[2], source_direction);
+            // Ray direction is TOWARD surface (opposite of source direction)
+            vec3 ray_dir = make_vec3(-source_direction.x, -source_direction.y, -source_direction.z);
+            normal = calculateSurfaceNormal(prim.vertices[0], prim.vertices[1], prim.vertices[2], ray_dir);
         } else if (prim.type == helios::PRIMITIVE_TYPE_TRIANGLE) {
             // Barycentric sampling for triangle
             if (u + v > 1.0f) {
@@ -113,22 +115,25 @@ struct DirectRaysFunctor {
             ray_origin.x = w*prim.vertices[0].x + u*prim.vertices[1].x + v*prim.vertices[2].x;
             ray_origin.y = w*prim.vertices[0].y + u*prim.vertices[1].y + v*prim.vertices[2].y;
             ray_origin.z = w*prim.vertices[0].z + u*prim.vertices[1].z + v*prim.vertices[2].z;
-            normal = calculateSurfaceNormal(prim.vertices[0], prim.vertices[1], prim.vertices[2], source_direction);
+            // Ray direction is TOWARD surface (opposite of source direction)
+            vec3 ray_dir = make_vec3(-source_direction.x, -source_direction.y, -source_direction.z);
+            normal = calculateSurfaceNormal(prim.vertices[0], prim.vertices[1], prim.vertices[2], ray_dir);
         } else {
             return; // Unsupported primitive type
         }
 
-        // Check if ray hits the primitive (dot product with normal)
-        float cos_theta = -(normal.x * source_direction.x +
-                           normal.y * source_direction.y +
-                           normal.z * source_direction.z);
+        // Calculate cos(theta) = dot product of normal with direction TO source
+        // For radiation, this gives the cosine of the incident angle
+        float cos_theta = normal.x * source_direction.x +
+                          normal.y * source_direction.y +
+                          normal.z * source_direction.z;
 
         if (cos_theta <= 0.0f) {
             if (!prim.twosided) return; // Backface, no contribution
             cos_theta = -cos_theta;
         }
 
-        // Cast ray in source direction and check for occlusions
+        // Cast ray toward source to check for occlusions
         bool occluded = false;
         float min_distance = INFINITY_DISTANCE;
 
@@ -157,8 +162,10 @@ struct DirectRaysFunctor {
         }
 
         if (!occluded) {
+            // Calculate absorbed fraction (1 - reflectivity - transmissivity)
+            float absorbed = 1.0f - prim.rho - prim.tau;
             // Accumulate flux contribution
-            float contribution = source_flux * cos_theta / float(Nrays_per_prim);
+            float contribution = source_flux * cos_theta * absorbed / float(Nrays_per_prim);
             Kokkos::atomic_add(&flux_out(prim_id), contribution);
         }
     }
@@ -319,8 +326,8 @@ struct EmissionFunctor {
         if (prim_id >= Nprimitives) return;
         const PrimitiveData& prim = primitives(prim_id);
 
-        // Add emission contribution (negative because it's outgoing)
-        Kokkos::atomic_add(&flux_out(prim_id), -prim.emission);
+        // Add emission contribution
+        Kokkos::atomic_add(&flux_out(prim_id), prim.emission);
     }
 };
 
@@ -353,13 +360,22 @@ struct ScatteringFunctor {
 
         const PrimitiveData& prim = primitives(prim_id);
 
-        // Energy to scatter = absorbed * reflectivity
-        float incident = flux_in(prim_id);
-        if (incident <= 0.0f) {
+        // Get absorbed flux and convert to total incident flux
+        float absorbed_flux = flux_in(prim_id);
+        if (absorbed_flux <= 0.0f) {
             rng.pool.free_state(generator);
             return;
         }
 
+        // Total incident = absorbed / (1 - rho - tau)
+        float absorption_fraction = 1.0f - prim.rho - prim.tau;
+        if (absorption_fraction < 1e-6f) {
+            rng.pool.free_state(generator);
+            return; // Fully reflective/transmissive surface
+        }
+        float incident = absorbed_flux / absorption_fraction;
+
+        // Energy to scatter = total incident * reflectivity
         float to_scatter = incident * prim.rho;
 
         // Random point on primitive
@@ -607,16 +623,31 @@ void RadiationModel::runBand_kokkos(const std::string &label) {
     RandomGenerator rng(12345, num_states);
 
     // 1. Process direct radiation sources
+    if (message_flag && radiation_sources.size() > 0) {
+        std::cout << "Processing " << radiation_sources.size() << " radiation source(s) for band '" << label << "'" << std::endl;
+    }
     for (const auto& source : radiation_sources) {
-        if (source.source_fluxes.find(label) == source.source_fluxes.end()) continue;
+        if (source.source_fluxes.find(label) == source.source_fluxes.end()) {
+            if (message_flag) std::cout << "  Source has no flux for band '" << label << "'" << std::endl;
+            continue;
+        }
         float source_flux = source.source_fluxes.at(label);
-        if (source_flux < 0) continue;
+        if (message_flag) {
+            std::cout << "  Source flux for '" << label << "': " << source_flux << std::endl;
+        }
+        if (source_flux < 0) {
+            if (message_flag) std::cout << "  Skipping source with negative flux" << std::endl;
+            continue;
+        }
 
         if (source.source_type == RADIATION_SOURCE_TYPE_COLLIMATED) {
             vec3 source_dir = source.source_position;
             source_dir.normalize();
 
             uint Nrays_total = Nprimitives * band.directRayCount;
+            if (message_flag) {
+                std::cout << "  Launching " << Nrays_total << " direct rays (dir=" << source_dir.x << "," << source_dir.y << "," << source_dir.z << ")" << std::endl;
+            }
 
             DirectRaysFunctor functor(d_primitives, d_flux, source_dir, source_flux,
                                      Nprimitives, band.directRayCount, rng);
@@ -644,12 +675,18 @@ void RadiationModel::runBand_kokkos(const std::string &label) {
 
     // 4. Handle scattering
     if (band.scatteringDepth > 0) {
+        if (message_flag) {
+            std::cout << "Running scattering with depth=" << band.scatteringDepth << std::endl;
+        }
         Kokkos::View<float*> d_flux_scatter("flux_scatter", Nprimitives);
 
         for (uint iter = 0; iter < band.scatteringDepth; iter++) {
             Kokkos::deep_copy(d_flux_scatter, 0.0f);
 
             uint Nrays_total = Nprimitives * band.diffuseRayCount;
+            if (message_flag) {
+                std::cout << "  Scattering iteration " << iter << ": launching " << Nrays_total << " rays" << std::endl;
+            }
             ScatteringFunctor scatter_functor(d_primitives, d_flux, d_flux_scatter,
                                              Nprimitives, band.diffuseRayCount, rng,
                                              Nrays_total * (iter + 10));
@@ -661,12 +698,31 @@ void RadiationModel::runBand_kokkos(const std::string &label) {
                 d_flux(i) += d_flux_scatter(i);
             });
             Kokkos::fence();
+
+            if (message_flag) {
+                auto h_scatter = Kokkos::create_mirror_view(d_flux_scatter);
+                Kokkos::deep_copy(h_scatter, d_flux_scatter);
+                float total_scatter = 0;
+                for (size_t i = 0; i < Nprimitives; i++) {
+                    total_scatter += h_scatter(i);
+                }
+                std::cout << "    Total scattered flux: " << total_scatter << std::endl;
+            }
         }
     }
 
     // Copy results back to host and update context
     auto h_flux = Kokkos::create_mirror_view(d_flux);
     Kokkos::deep_copy(h_flux, d_flux);
+
+    // Debug: print flux sums
+    float total_flux = 0.0f;
+    for (size_t i = 0; i < Nprimitives; i++) {
+        total_flux += h_flux(i);
+    }
+    if (message_flag) {
+        std::cout << "Total flux for band '" << label << "': " << total_flux << " (Nprims=" << Nprimitives << ")" << std::endl;
+    }
 
     std::string flux_label = "radiation_flux_" + label;
     for (size_t i = 0; i < Nprimitives; i++) {
