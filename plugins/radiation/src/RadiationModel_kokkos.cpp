@@ -41,7 +41,10 @@ struct RandomGenerator {
     using generator_pool = Kokkos::Random_XorShift64_Pool<>;
     generator_pool pool;
 
-    RandomGenerator(uint64_t seed) : pool(seed) {}
+    RandomGenerator(uint64_t seed, uint64_t num_states) : pool(seed) {
+        // Initialize pool with enough states for all parallel work
+        pool = generator_pool(seed, num_states);
+    }
 
     KOKKOS_INLINE_FUNCTION
     float uniform(uint64_t state) const {
@@ -524,16 +527,16 @@ void RadiationModel::runBand_kokkos(const std::string &label) {
         h_primitives[i].area = context->getPrimitiveArea(UUID);
 
         // Get vertices
+        std::vector<vec3> verts = context->getPrimitiveVertices(UUID);
+
         if (ptype == helios::PRIMITIVE_TYPE_PATCH) {
-            h_primitives[i].type = PRIMITIVE_TYPE_PATCH;
-            std::vector<vec3> verts = context->getPatchPointer(UUID)->getVertices();
-            for (int j = 0; j < 4; j++) {
+            h_primitives[i].type = helios::PRIMITIVE_TYPE_PATCH;
+            for (int j = 0; j < 4 && j < verts.size(); j++) {
                 h_primitives[i].vertices[j] = verts[j];
             }
         } else if (ptype == helios::PRIMITIVE_TYPE_TRIANGLE) {
-            h_primitives[i].type = PRIMITIVE_TYPE_TRIANGLE;
-            std::vector<vec3> verts = context->getTrianglePointer(UUID)->getVertices();
-            for (int j = 0; j < 3; j++) {
+            h_primitives[i].type = helios::PRIMITIVE_TYPE_TRIANGLE;
+            for (int j = 0; j < 3 && j < verts.size(); j++) {
                 h_primitives[i].vertices[j] = verts[j];
             }
         } else {
@@ -597,7 +600,11 @@ void RadiationModel::runBand_kokkos(const std::string &label) {
     Kokkos::deep_copy(d_flux, 0.0f);
 
     // Random number generator
-    RandomGenerator rng(12345);
+    // Calculate max states needed (considering scattering offsets)
+    uint64_t max_rays = Nprimitives * std::max(band.directRayCount, band.diffuseRayCount);
+    uint64_t max_offset = max_rays * (band.scatteringDepth + 10);
+    uint64_t num_states = max_rays + max_offset + 1000; // Extra buffer
+    RandomGenerator rng(12345, num_states);
 
     // 1. Process direct radiation sources
     for (const auto& source : radiation_sources) {

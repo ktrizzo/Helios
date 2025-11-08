@@ -1122,9 +1122,11 @@ void RadiationModel::setSourcePosition( uint source_ID, const vec3 &position ){
         radiation_sources.at(source_ID).source_position = position * radiation_sources.at(source_ID).source_position_scaling_factor;
     }
 
+#ifdef HELIOS_USE_OPTIX
     if( islightvisualizationenabled ){
         updateLightModelPosition( source_ID, radiation_sources.at(source_ID).source_position - old_position );
     }
+#endif
 
 }
 
@@ -1180,6 +1182,7 @@ void RadiationModel::enforcePeriodicBoundary(const std::string &boundary ){
 
 }
 
+#ifdef HELIOS_USE_OPTIX
 void RadiationModel::addRadiationCamera(const std::string &camera_label, const std::vector<std::string> &band_label, const helios::vec3 &position, const helios::vec3 &lookat, const CameraProperties &camera_properties, uint antialiasing_samples) {
 
     if( camera_properties.FOV_aspect_ratio<=0 ){
@@ -1503,7 +1506,9 @@ void RadiationModel::writeCameraImageData(const std::string &camera, const std::
     outfilestream.close();
 
 }
+#endif // HELIOS_USE_OPTIX - Camera functions end
 
+#ifdef HELIOS_USE_OPTIX
 void RadiationModel::initializeOptiX() {
 
     /* Context */
@@ -1987,6 +1992,7 @@ void RadiationModel::initializeOptiX() {
     // }
 
 }
+#endif // HELIOS_USE_OPTIX - initializeOptiX end
 
 void RadiationModel::updateGeometry() {
     updateGeometry( context->getAllUUIDs() );
@@ -1995,11 +2001,8 @@ void RadiationModel::updateGeometry() {
 void RadiationModel::updateGeometry( const std::vector<uint>& UUIDs ){
 
 #ifdef HELIOS_USE_KOKKOS
-    // Use Kokkos version
     updateGeometry_kokkos();
-    return;
-#endif
-
+#else  // HELIOS_USE_OPTIX
     if( message_flag ){
         std::cout << "Updating geometry in radiation transport model..." << std::flush;
     }
@@ -2497,8 +2500,10 @@ void RadiationModel::updateGeometry( const std::vector<uint>& UUIDs ){
         std::cout << "done." << std::endl;
     }
 
+#endif // HELIOS_USE_KOKKOS / HELIOS_USE_OPTIX
 }
 
+#ifdef HELIOS_USE_OPTIX
 void RadiationModel::updateRadiativeProperties( const std::vector<std::string> &labels ) {
 
     // Possible scenarios for specifying a primitive's radiative properties
@@ -3075,6 +3080,7 @@ void RadiationModel::updateRadiativeProperties( const std::vector<std::string> &
     }
 
 }
+#endif // HELIOS_USE_OPTIX - updateRadiativeProperties end
 
 std::vector<helios::vec2> RadiationModel::loadSpectralData( const std::string &global_data_label ) const{
 
@@ -3134,12 +3140,8 @@ void RadiationModel::runBand( const std::string &label ) {
 void RadiationModel::runBand( const std::vector<std::string> &label ) {
 
 #ifdef HELIOS_USE_KOKKOS
-    // Use Kokkos version
     runBand_kokkos(label);
-    return;
-#endif
-
-#ifdef HELIOS_USE_OPTIX
+#else  // HELIOS_USE_OPTIX
     //----- VERIFICATIONS -----//
 
     //Check to make sure some geometry was added to the context
@@ -3742,8 +3744,8 @@ void RadiationModel::runBand( const std::vector<std::string> &label ) {
 
     }
 
+#endif // HELIOS_USE_KOKKOS / HELIOS_USE_OPTIX
 }
-#endif // HELIOS_USE_OPTIX
 
 #ifdef HELIOS_USE_OPTIX
 float RadiationModel::getSkyEnergy() {

@@ -1631,6 +1631,8 @@ int RadiationModel::selfTest(){
 
     std::cout << "Test #17: Radiation camera test based on ROMC brfpp_sgl verification..." << std::flush;
 
+#ifdef HELIOS_USE_OPTIX
+    // Test 17: Camera tests (OptiX-only feature)
     bool failure_17 = false;
 
     Context context_17;
@@ -1746,6 +1748,9 @@ int RadiationModel::selfTest(){
     }else{
         std::cout << "passed." << std::endl;
     }
+#else
+    std::cout << "skipped (cameras not available with Kokkos backend)." << std::endl;
+#endif // HELIOS_USE_OPTIX
 
     // ------------- //
 

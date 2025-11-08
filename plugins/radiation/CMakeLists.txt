@@ -115,16 +115,21 @@ else()
     message(STATUS "CUDA not found - building Radiation plugin with Kokkos (GPU-agnostic)")
 
     # Find Kokkos package
-    find_package(Kokkos REQUIRED)
+    # Try to find in common locations if not specified
+    if(NOT DEFINED Kokkos_DIR AND NOT DEFINED CMAKE_PREFIX_PATH)
+        set(Kokkos_DIR "/root/kokkos-install/lib/cmake/Kokkos" CACHE PATH "Kokkos directory")
+    endif()
+    find_package(Kokkos REQUIRED HINTS ${Kokkos_DIR})
 
     # Add Kokkos implementation source
     list(APPEND RADIATION_SOURCES "src/RadiationModel_kokkos.cpp")
 
     # Create library with Kokkos
     add_library(radiation STATIC ${RADIATION_SOURCES})
-    target_link_libraries(radiation Kokkos::kokkos)
-    target_compile_definitions(radiation PRIVATE HELIOS_USE_KOKKOS)
+    target_compile_definitions(radiation PUBLIC HELIOS_USE_KOKKOS)
     target_compile_features(radiation PUBLIC cxx_std_17)
+    # Link Kokkos using plain signature (no PUBLIC/PRIVATE keywords) to match CMake_project.txt
+    target_link_libraries(radiation Kokkos::kokkos)
 
     set( PLUGIN_INCLUDE_PATHS "${CMAKE_CURRENT_SOURCE_DIR}/include;${PLUGIN_INCLUDE_PATHS}" PARENT_SCOPE )
 

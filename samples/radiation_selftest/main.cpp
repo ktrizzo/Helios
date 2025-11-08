@@ -6,11 +6,12 @@
 
 using namespace helios;
 
-int main()
+int main(int argc, char* argv[])
 {
 
 #ifdef HELIOS_USE_KOKKOS
-  Kokkos::initialize();
+  Kokkos::initialize(argc, argv);
+  std::cout << "Kokkos initialized: " << Kokkos::is_initialized() << std::endl;
 #endif
 
   Context context;
