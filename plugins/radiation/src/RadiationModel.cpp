@@ -361,9 +361,11 @@ uint RadiationModel::addSphereRadiationSource( const vec3 &position, float radiu
 
     uint sourceID = Nsources-1;
 
+#ifdef HELIOS_USE_OPTIX
     if( islightvisualizationenabled ){
         buildLightModelGeometry(sourceID);
     }
+#endif
 
     return sourceID;
 
@@ -429,9 +431,11 @@ uint RadiationModel::addRectangleRadiationSource( const vec3 &position, const ve
 
     uint sourceID = Nsources-1;
 
+#ifdef HELIOS_USE_OPTIX
     if( islightvisualizationenabled ){
         buildLightModelGeometry(sourceID);
     }
+#endif
 
     return sourceID;
 
@@ -459,9 +463,11 @@ uint RadiationModel::addDiskRadiationSource( const vec3 &position, float radius,
 
     uint sourceID = Nsources-1;
 
+#ifdef HELIOS_USE_OPTIX
     if( islightvisualizationenabled ){
         buildLightModelGeometry(sourceID);
     }
+#endif
 
     return sourceID;
 
@@ -672,6 +678,7 @@ float RadiationModel::getDiffuseFlux( const std::string &band_label ) const{
 
 }
 
+#ifdef HELIOS_USE_OPTIX
 void RadiationModel::enableLightModelVisualization(){
     islightvisualizationenabled = true;
 
@@ -705,6 +712,9 @@ void RadiationModel::disableCameraModelVisualization() {
         context->deletePrimitive(UUIDs.second);
     }
 }
+#endif // HELIOS_USE_OPTIX
+
+#ifdef HELIOS_USE_OPTIX
 
 void RadiationModel::buildLightModelGeometry( uint sourceID ){
 
@@ -795,6 +805,7 @@ void RadiationModel::updateCameraModelPosition(const std::string &cameralabel) {
     buildCameraModelGeometry( cameralabel );
 
 }
+#endif // HELIOS_USE_OPTIX
 
 float RadiationModel::integrateSpectrum( uint source_ID, const std::vector<helios::vec2> &object_spectrum, float wavelength1, float wavelength2 ) const{
 
@@ -3128,6 +3139,7 @@ void RadiationModel::runBand( const std::vector<std::string> &label ) {
     return;
 #endif
 
+#ifdef HELIOS_USE_OPTIX
     //----- VERIFICATIONS -----//
 
     //Check to make sure some geometry was added to the context
@@ -3731,7 +3743,9 @@ void RadiationModel::runBand( const std::vector<std::string> &label ) {
     }
 
 }
+#endif // HELIOS_USE_OPTIX
 
+#ifdef HELIOS_USE_OPTIX
 float RadiationModel::getSkyEnergy() {
 
     std::vector<float> Rsky_SW;
@@ -3743,6 +3757,7 @@ float RadiationModel::getSkyEnergy() {
     return Rsky;
 
 }
+#endif // HELIOS_USE_OPTIX
 
 std::vector<float> RadiationModel::getTotalAbsorbedFlux() {
 
@@ -3770,6 +3785,8 @@ std::vector<float> RadiationModel::getTotalAbsorbedFlux() {
     return total_flux;
 
 }
+
+#ifdef HELIOS_USE_OPTIX  // OptiX buffer and helper functions start
 
 std::vector<float> RadiationModel::getOptiXbufferData( RTbuffer buffer ){
 
@@ -4866,16 +4883,17 @@ float RadiationModel::calculateGtheta(helios::Context* context, vec3 view_direct
     return Gtheta/total_area;
 
 }
+#endif // HELIOS_USE_OPTIX - OptiX buffer and helper functions end
 
 void RadiationModel::setCameraCalibration(CameraCalibration *CameraCalibration){
     cameracalibration = CameraCalibration;
     calibration_flag = true;
 }
 
+#ifdef HELIOS_USE_OPTIX  // Camera functions start
 void RadiationModel::updateCameraResponse(const std::string &orginalcameralabel, const std::vector<std::string> &sourcelabels_raw,
                                           const std::vector<std::string>& cameraresponselabels, vec2 &wavelengthrange,
                                           const std::vector<std::vector<float>> &truevalues, const std::string &calibratedmark) {
-
     std::vector<std::string> objectlabels;
     vec2 wavelengthrange_c = wavelengthrange;
     cameracalibration->preprocessSpectra(sourcelabels_raw, cameraresponselabels, objectlabels, wavelengthrange_c);
@@ -5739,7 +5757,9 @@ void RadiationModel::calibrateCamera(const std::string &originalcameralabel, con
     cameracalibration->writeCalibratedCameraResponses(cameraresplabels_raw, calibratedmark, camerascale*scalefactor);
 
 }
+#endif // HELIOS_USE_OPTIX - Camera functions end
 
+#ifdef HELIOS_USE_OPTIX
 std::vector<helios::vec2> RadiationModel::generateGaussianCameraResponse(float FWHM, float mu, float centrawavelength, const helios::int2 &wavebanrange){
 
     // Convert FWHM to sigma
@@ -5783,3 +5803,4 @@ void sutilReportError(const char* message)
   }
 #endif
 }
+#endif // HELIOS_USE_OPTIX

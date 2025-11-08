@@ -1107,6 +1107,7 @@ protected:
 
     // --- Camera Variables --- //
 
+#ifdef HELIOS_USE_OPTIX
     //! Radiation cameras
     std::map<std::string,RadiationCamera> cameras;
 
@@ -1141,6 +1142,9 @@ protected:
     std::map<std::string,std::vector<uint>> spectral_transmissivity_data;
 
     std::vector<helios::vec2> generateGaussianCameraResponse(float FWHM, float mu, float centrawavelength, const helios::int2 &wavebanrange);
+
+#endif // HELIOS_USE_OPTIX (Camera Variables)
+#endif // HELIOS_USE_OPTIX (Source and Camera RT Variables)
 
     // --- Constants and Defaults --- //
 
@@ -1373,7 +1377,6 @@ protected:
     */
     template <typename anytype>
     void initializeBuffer3D(RTbuffer &buffer, const std::vector<std::vector<std::vector<anytype>>> &array );
-#endif // HELIOS_USE_OPTIX
 
     void buildLightModelGeometry( uint sourceID );
 
@@ -1447,8 +1450,7 @@ protected:
     //! Bounding sphere center
     RTvariable bound_sphere_center_RTvariable;
 
-    //! Periodic boundary condition
-    helios::vec2 periodic_flag;
+    //! Periodic boundary RT variable
     RTvariable periodic_flag_RTvariable;
 
     //! Energy absorbed by the "sky"
@@ -1661,6 +1663,9 @@ protected:
 
 #endif // HELIOS_USE_OPTIX
 
+    //! Periodic boundary condition
+    helios::vec2 periodic_flag;
+
     //! Flag indicating whether geometry has been built
     /**
         \sa \ref buildGeometry()
@@ -1679,6 +1684,7 @@ protected:
 
 };
 
+#ifdef HELIOS_USE_OPTIX
 void sutilHandleError(RTcontext context, RTresult code, const char* file, int line);
 
 void sutilReportError(const char* message);
@@ -1690,5 +1696,6 @@ void sutilReportError(const char* message);
     if( code != RT_SUCCESS )                                       \
       sutilHandleError( OptiX_Context, code, __FILE__, __LINE__ );       \
   } while(0)
+#endif // HELIOS_USE_OPTIX
 
 #endif

@@ -21,12 +21,7 @@ using namespace helios;
 namespace {
     // Constants
     constexpr float INFINITY_DISTANCE = 1e10f;
-    constexpr uint PRIMITIVE_TYPE_PATCH = 0;
-    constexpr uint PRIMITIVE_TYPE_TRIANGLE = 1;
-    constexpr uint PRIMITIVE_TYPE_DISK = 2;
-    constexpr uint PRIMITIVE_TYPE_TILE = 3;
-    constexpr uint PRIMITIVE_TYPE_VOXEL = 4;
-    constexpr uint PRIMITIVE_TYPE_BBOX = 5;
+    // Use helios primitive types from Context.h instead of redefining
 }
 
 // Helper struct to store primitive data
@@ -96,7 +91,7 @@ struct DirectRaysFunctor {
         vec3 ray_origin;
         vec3 normal;
 
-        if (prim.type == PRIMITIVE_TYPE_PATCH) {
+        if (prim.type == helios::PRIMITIVE_TYPE_PATCH) {
             // Bilinear interpolation for patch
             ray_origin.x = (1-u)*(1-v)*prim.vertices[0].x + u*(1-v)*prim.vertices[1].x +
                           u*v*prim.vertices[2].x + (1-u)*v*prim.vertices[3].x;
@@ -105,7 +100,7 @@ struct DirectRaysFunctor {
             ray_origin.z = (1-u)*(1-v)*prim.vertices[0].z + u*(1-v)*prim.vertices[1].z +
                           u*v*prim.vertices[2].z + (1-u)*v*prim.vertices[3].z;
             normal = calculateSurfaceNormal(prim.vertices[0], prim.vertices[1], prim.vertices[2], source_direction);
-        } else if (prim.type == PRIMITIVE_TYPE_TRIANGLE) {
+        } else if (prim.type == helios::PRIMITIVE_TYPE_TRIANGLE) {
             // Barycentric sampling for triangle
             if (u + v > 1.0f) {
                 u = 1.0f - u;
@@ -141,12 +136,12 @@ struct DirectRaysFunctor {
             float hit_distance;
             bool hit = false;
 
-            if (other.type == PRIMITIVE_TYPE_PATCH) {
+            if (other.type == helios::PRIMITIVE_TYPE_PATCH) {
                 hit = rayPatchIntersect(ray_origin, source_direction,
                                        other.vertices[0], other.vertices[1],
                                        other.vertices[2], other.vertices[3],
                                        hit_distance);
-            } else if (other.type == PRIMITIVE_TYPE_TRIANGLE) {
+            } else if (other.type == helios::PRIMITIVE_TYPE_TRIANGLE) {
                 hit = rayTriangleIntersect(ray_origin, source_direction,
                                           other.vertices[0], other.vertices[1], other.vertices[2],
                                           hit_distance);
@@ -202,7 +197,7 @@ struct DiffuseRaysFunctor {
         vec3 ray_origin;
         vec3 normal;
 
-        if (prim.type == PRIMITIVE_TYPE_PATCH) {
+        if (prim.type == helios::PRIMITIVE_TYPE_PATCH) {
             ray_origin.x = (1-u)*(1-v)*prim.vertices[0].x + u*(1-v)*prim.vertices[1].x +
                           u*v*prim.vertices[2].x + (1-u)*v*prim.vertices[3].x;
             ray_origin.y = (1-u)*(1-v)*prim.vertices[0].y + u*(1-v)*prim.vertices[1].y +
@@ -211,7 +206,7 @@ struct DiffuseRaysFunctor {
                           u*v*prim.vertices[2].z + (1-u)*v*prim.vertices[3].z;
             vec3 dummy_dir = make_vec3(0, 0, 1);
             normal = calculateSurfaceNormal(prim.vertices[0], prim.vertices[1], prim.vertices[2], dummy_dir);
-        } else if (prim.type == PRIMITIVE_TYPE_TRIANGLE) {
+        } else if (prim.type == helios::PRIMITIVE_TYPE_TRIANGLE) {
             if (u + v > 1.0f) {
                 u = 1.0f - u;
                 v = 1.0f - v;
@@ -279,12 +274,12 @@ struct DiffuseRaysFunctor {
             float hit_distance;
             bool hit = false;
 
-            if (other.type == PRIMITIVE_TYPE_PATCH) {
+            if (other.type == helios::PRIMITIVE_TYPE_PATCH) {
                 hit = rayPatchIntersect(ray_origin, ray_direction,
                                        other.vertices[0], other.vertices[1],
                                        other.vertices[2], other.vertices[3],
                                        hit_distance);
-            } else if (other.type == PRIMITIVE_TYPE_TRIANGLE) {
+            } else if (other.type == helios::PRIMITIVE_TYPE_TRIANGLE) {
                 hit = rayTriangleIntersect(ray_origin, ray_direction,
                                           other.vertices[0], other.vertices[1], other.vertices[2],
                                           hit_distance);
@@ -371,7 +366,7 @@ struct ScatteringFunctor {
         vec3 ray_origin;
         vec3 normal;
 
-        if (prim.type == PRIMITIVE_TYPE_PATCH) {
+        if (prim.type == helios::PRIMITIVE_TYPE_PATCH) {
             ray_origin.x = (1-u)*(1-v)*prim.vertices[0].x + u*(1-v)*prim.vertices[1].x +
                           u*v*prim.vertices[2].x + (1-u)*v*prim.vertices[3].x;
             ray_origin.y = (1-u)*(1-v)*prim.vertices[0].y + u*(1-v)*prim.vertices[1].y +
@@ -380,7 +375,7 @@ struct ScatteringFunctor {
                           u*v*prim.vertices[2].z + (1-u)*v*prim.vertices[3].z;
             vec3 dummy_dir = make_vec3(0, 0, 1);
             normal = calculateSurfaceNormal(prim.vertices[0], prim.vertices[1], prim.vertices[2], dummy_dir);
-        } else if (prim.type == PRIMITIVE_TYPE_TRIANGLE) {
+        } else if (prim.type == helios::PRIMITIVE_TYPE_TRIANGLE) {
             if (u + v > 1.0f) {
                 u = 1.0f - u;
                 v = 1.0f - v;
@@ -446,12 +441,12 @@ struct ScatteringFunctor {
             float hit_distance;
             bool hit = false;
 
-            if (other.type == PRIMITIVE_TYPE_PATCH) {
+            if (other.type == helios::PRIMITIVE_TYPE_PATCH) {
                 hit = rayPatchIntersect(ray_origin, ray_direction,
                                        other.vertices[0], other.vertices[1],
                                        other.vertices[2], other.vertices[3],
                                        hit_distance);
-            } else if (other.type == PRIMITIVE_TYPE_TRIANGLE) {
+            } else if (other.type == helios::PRIMITIVE_TYPE_TRIANGLE) {
                 hit = rayTriangleIntersect(ray_origin, ray_direction,
                                           other.vertices[0], other.vertices[1], other.vertices[2],
                                           hit_distance);
