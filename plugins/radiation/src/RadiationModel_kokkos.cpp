@@ -171,24 +171,27 @@ struct DirectRaysFunctor {
     }
 };
 
-// Diffuse radiation ray generation functor
+// Diffuse radiation ray generation functor (radiosity-style)
+// Samples both sky flux (on miss) and radiation_out (on hit)
 struct DiffuseRaysFunctor {
     Kokkos::View<PrimitiveData*> primitives;
-    Kokkos::View<float*> flux_out;
-    float diffuse_flux;
+    Kokkos::View<float*> radiation_out;  // Outgoing radiation from each primitive (emission + scattered)
+    Kokkos::View<float*> flux_out;       // Absorbed flux accumulator
+    float diffuse_flux;                  // Sky diffuse flux
     uint Nprimitives;
     uint Nrays_per_prim;
     RandomGenerator rng;
     uint64_t seed_offset;
 
     DiffuseRaysFunctor(Kokkos::View<PrimitiveData*> prims,
+                       Kokkos::View<float*> rad_out,
                        Kokkos::View<float*> flux,
                        float diff_flux,
                        uint Nprims,
                        uint Nrays,
                        const RandomGenerator& random,
                        uint64_t offset)
-        : primitives(prims), flux_out(flux), diffuse_flux(diff_flux),
+        : primitives(prims), radiation_out(rad_out), flux_out(flux), diffuse_flux(diff_flux),
           Nprimitives(Nprims), Nrays_per_prim(Nrays), rng(random), seed_offset(offset) {}
 
     KOKKOS_INLINE_FUNCTION
@@ -274,8 +277,9 @@ struct DiffuseRaysFunctor {
         ray_direction.y /= mag;
         ray_direction.z /= mag;
 
-        // Cast ray and check for occlusions
-        bool occluded = false;
+        // Cast ray to find nearest intersection (radiosity sampling)
+        float min_distance = INFINITY_DISTANCE;
+        int hit_prim_id = -1;
 
         for (uint other_id = 0; other_id < Nprimitives; other_id++) {
             if (other_id == prim_id) continue;
@@ -295,14 +299,20 @@ struct DiffuseRaysFunctor {
                                           hit_distance);
             }
 
-            if (hit) {
-                occluded = true;
-                break;
+            if (hit && hit_distance < min_distance) {
+                min_distance = hit_distance;
+                hit_prim_id = other_id;
             }
         }
 
-        if (!occluded) {
-            // Cosine-weighted sampling already accounts for cos(theta)
+        if (hit_prim_id >= 0) {
+            // Ray hit another primitive - sample its outgoing radiation (OptiX radiosity)
+            // strength = radiation_out[hit_prim] * (1/N_rays) * (1 - rho - tau)
+            float strength = radiation_out(hit_prim_id) / float(Nrays_per_prim);
+            float absorbed = 1.0f - prim.rho - prim.tau;
+            Kokkos::atomic_add(&flux_out(prim_id), strength * absorbed);
+        } else {
+            // Ray escaped to sky - sample diffuse sky flux
             float contribution = diffuse_flux / float(Nrays_per_prim);
             Kokkos::atomic_add(&flux_out(prim_id), contribution);
         }
@@ -311,150 +321,7 @@ struct DiffuseRaysFunctor {
     }
 };
 
-// Emission ray tracing functor (thermal radiation from hot surfaces)
-struct EmissionRaysFunctor {
-    Kokkos::View<PrimitiveData*> primitives;
-    Kokkos::View<float*> flux_out;
-    uint Nprimitives;
-    uint Nrays_per_prim;
-    RandomGenerator rng;
-    uint random_offset;
-
-    EmissionRaysFunctor(Kokkos::View<PrimitiveData*> prims,
-                       Kokkos::View<float*> flux,
-                       uint Nprims, uint Nrays,
-                       RandomGenerator& rng_gen, uint offset)
-        : primitives(prims), flux_out(flux), Nprimitives(Nprims),
-          Nrays_per_prim(Nrays), rng(rng_gen), random_offset(offset) {}
-
-    KOKKOS_INLINE_FUNCTION
-    void operator()(const uint ray_id) const {
-        if (Nprimitives == 0 || Nrays_per_prim == 0) return;
-
-        uint prim_id = ray_id / Nrays_per_prim;
-        if (prim_id >= Nprimitives) return;
-
-        const PrimitiveData& prim = primitives(prim_id);
-
-        // Skip if no emission
-        if (prim.emission <= 0) return;
-
-        // Get random generator for this ray
-        auto generator = rng.pool.get_state(random_offset + ray_id);
-
-        // Sample random point on primitive surface
-        float u = generator.frand();
-        float v = generator.frand();
-        if (u + v > 1.0f) { u = 1.0f - u; v = 1.0f - v; }
-
-        vec3 ray_origin = make_vec3(
-            prim.vertices[0].x * (1.0f - u - v) + prim.vertices[1].x * u + prim.vertices[2].x * v,
-            prim.vertices[0].y * (1.0f - u - v) + prim.vertices[1].y * u + prim.vertices[2].y * v,
-            prim.vertices[0].z * (1.0f - u - v) + prim.vertices[1].z * u + prim.vertices[2].z * v
-        );
-
-        // Calculate surface normal (outward-facing)
-        float edge1_x = prim.vertices[1].x - prim.vertices[0].x;
-        float edge1_y = prim.vertices[1].y - prim.vertices[0].y;
-        float edge1_z = prim.vertices[1].z - prim.vertices[0].z;
-        float edge2_x = prim.vertices[2].x - prim.vertices[0].x;
-        float edge2_y = prim.vertices[2].y - prim.vertices[0].y;
-        float edge2_z = prim.vertices[2].z - prim.vertices[0].z;
-
-        float normal_x = edge1_y * edge2_z - edge1_z * edge2_y;
-        float normal_y = edge1_z * edge2_x - edge1_x * edge2_z;
-        float normal_z = edge1_x * edge2_y - edge1_y * edge2_x;
-
-        float magnitude = Kokkos::sqrt(normal_x*normal_x + normal_y*normal_y + normal_z*normal_z);
-        if (magnitude < RAY_EPSILON) {
-            rng.pool.free_state(generator);
-            return;
-        }
-
-        vec3 normal = make_vec3(normal_x / magnitude, normal_y / magnitude, normal_z / magnitude);
-
-        // Sample cosine-weighted hemisphere direction for thermal emission
-        float r1 = generator.frand();
-        float r2 = generator.frand();
-        float phi = 2.0f * float(M_PI) * r1;
-        float cos_theta = Kokkos::sqrt(r2);
-        float sin_theta = Kokkos::sqrt(1.0f - r2);
-
-        // Local coordinate system
-        vec3 w = normal;
-        vec3 u_vec = (Kokkos::fabs(w.x) > 0.1f) ?
-                     make_vec3(0, 1, 0) : make_vec3(1, 0, 0);
-        vec3 v_vec = make_vec3(
-            w.y * u_vec.z - w.z * u_vec.y,
-            w.z * u_vec.x - w.x * u_vec.z,
-            w.x * u_vec.y - w.y * u_vec.x
-        );
-        float v_mag = Kokkos::sqrt(v_vec.x*v_vec.x + v_vec.y*v_vec.y + v_vec.z*v_vec.z);
-        v_vec = make_vec3(v_vec.x/v_mag, v_vec.y/v_mag, v_vec.z/v_mag);
-        vec3 u_final = make_vec3(
-            v_vec.y * w.z - v_vec.z * w.y,
-            v_vec.z * w.x - v_vec.x * w.z,
-            v_vec.x * w.y - v_vec.y * w.x
-        );
-
-        // Transform to world coordinates
-        vec3 ray_dir = make_vec3(
-            u_final.x * Kokkos::cos(phi) * sin_theta + v_vec.x * Kokkos::sin(phi) * sin_theta + w.x * cos_theta,
-            u_final.y * Kokkos::cos(phi) * sin_theta + v_vec.y * Kokkos::sin(phi) * sin_theta + w.y * cos_theta,
-            u_final.z * Kokkos::cos(phi) * sin_theta + v_vec.z * Kokkos::sin(phi) * sin_theta + w.z * cos_theta
-        );
-
-        // Normalize
-        float dir_mag = Kokkos::sqrt(ray_dir.x*ray_dir.x + ray_dir.y*ray_dir.y + ray_dir.z*ray_dir.z);
-        ray_dir = make_vec3(ray_dir.x/dir_mag, ray_dir.y/dir_mag, ray_dir.z/dir_mag);
-
-        // Trace ray to find nearest intersection
-        float min_distance = 1e8f;
-        int hit_prim_id = -1;
-
-        for (uint i = 0; i < Nprimitives; i++) {
-            if (i == prim_id) continue; // Skip self-intersection
-
-            const PrimitiveData& target = primitives(i);
-            float distance;
-            bool hit = false;
-
-            if (target.type == helios::PRIMITIVE_TYPE_TRIANGLE) {
-                hit = rayTriangleIntersect(ray_origin, ray_dir,
-                                          target.vertices[0], target.vertices[1], target.vertices[2],
-                                          distance);
-            } else if (target.type == helios::PRIMITIVE_TYPE_PATCH) {
-                hit = rayPatchIntersect(ray_origin, ray_dir,
-                                       target.vertices[0], target.vertices[1],
-                                       target.vertices[2], target.vertices[3],
-                                       distance);
-            }
-
-            if (hit && distance < min_distance) {
-                min_distance = distance;
-                hit_prim_id = i;
-            }
-        }
-
-        // If ray hit something, add absorbed flux
-        if (hit_prim_id >= 0) {
-            const PrimitiveData& hit_prim = primitives(hit_prim_id);
-
-            // Calculate absorbed fraction (1 - reflectivity - transmissivity)
-            float absorbed = 1.0f - hit_prim.rho - hit_prim.tau;
-
-            // Emission contribution: each ray carries emission/N_rays flux
-            // For Lambertian emission with cosine-weighted sampling, this is the correct estimator
-            float contribution = prim.emission * absorbed / float(Nrays_per_prim);
-
-            Kokkos::atomic_add(&flux_out(hit_prim_id), contribution);
-        }
-
-        rng.pool.free_state(generator);
-    }
-};
-
-// Scattering functor (simplified - single bounce)
+// Scattering functor (radiosity - samples radiation_out from hit primitives)
 struct ScatteringFunctor {
     Kokkos::View<PrimitiveData*> primitives;
     Kokkos::View<float*> flux_in;
