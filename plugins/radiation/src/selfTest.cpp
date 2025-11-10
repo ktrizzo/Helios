@@ -24,12 +24,7 @@ int RadiationModel::selfTest(){
     float error_threshold = 0.005;
     bool failure = false;
 
-    // Temporarily reduce ensemble count for faster debugging on Kokkos serial backend
-    #ifdef HELIOS_USE_KOKKOS
-    int Nensemble = 10;
-    #else
     int Nensemble = 500;
-    #endif
 
     float shortwave_rho, shortwave_tau, longwave_rho, eps;
     float shortwave_exact_0, shortwave_model_0, shortwave_error_0, shortwave_exact_1, shortwave_model_1, shortwave_error_1;
@@ -46,14 +41,8 @@ int RadiationModel::selfTest(){
 
     std::cout << "Test #1: 90 degree common-edge squares..." << std::flush;
 
-    // Temporarily reduce ray counts for faster debugging on Kokkos serial backend
-    #ifdef HELIOS_USE_KOKKOS
-    uint Ndiffuse_1 = 1000;
-    uint Ndirect_1 = 1000;
-    #else
     uint Ndiffuse_1 = 100000;
     uint Ndirect_1 = 5000;
-    #endif
 
     float Qs = 1000.f;
 
@@ -77,9 +66,7 @@ int RadiationModel::selfTest(){
     context_1.setPrimitiveData(0,"reflectivity_SW",HELIOS_TYPE_FLOAT,1,&shortwave_rho);
 
     RadiationModel radiationmodel_1(&context_1);
-    #ifndef HELIOS_USE_KOKKOS  // Enable messages for Kokkos debugging
     radiationmodel_1.disableMessages();
-    #endif
 
     //Longwave band
     radiationmodel_1.addRadiationBand("LW");
@@ -149,16 +136,6 @@ int RadiationModel::selfTest(){
     if( !failure_0 ){
         std::cout << "passed." << std::endl;
     }
-
-    #ifdef HELIOS_USE_KOKKOS
-    // Temporarily skip remaining tests for faster debugging
-    if (failure) {
-        return 1;
-    } else {
-        std::cout << "Skipping remaining tests for Kokkos debugging" << std::endl;
-        return 0;
-    }
-    #endif
 
     //----- Test #2: Parallel rectangles ------//
 
