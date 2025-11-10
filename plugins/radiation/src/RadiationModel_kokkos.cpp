@@ -443,12 +443,9 @@ struct EmissionRaysFunctor {
             // Calculate absorbed fraction (1 - reflectivity - transmissivity)
             float absorbed = 1.0f - hit_prim.rho - hit_prim.tau;
 
-            // Emission contribution (same approach as scattering)
-            // Note: Getting ~33% high (122 vs 92). This might be due to:
-            // 1. Emissivity should be set to 0.2 in test (currently defaults to 1.0)
-            // 2. Or view factor calculation needs adjustment
-            // For now, use empirical factor to match expected view factor
-            float contribution = prim.emission * absorbed * 0.75f / float(Nrays_per_prim);
+            // Emission contribution: each ray carries emission/N_rays flux
+            // For Lambertian emission with cosine-weighted sampling, this is the correct estimator
+            float contribution = prim.emission * absorbed / float(Nrays_per_prim);
 
             Kokkos::atomic_add(&flux_out(hit_prim_id), contribution);
         }
@@ -637,9 +634,7 @@ struct ScatteringFunctor {
         }
 
         if (hit_prim_id >= 0) {
-            // Scattering correction: empirically 6.6% too low, apply 1.07 factor
-            // (Emission needed 0.75 to reduce, scattering needs >1.0 to increase)
-            float contribution = to_scatter * 1.07f / float(Nrays_per_prim);
+            float contribution = to_scatter / float(Nrays_per_prim);
             Kokkos::atomic_add(&flux_out(hit_prim_id), contribution);
             Kokkos::atomic_add(&hit_count(0), 1);
             Kokkos::atomic_add(&hits_from_prim(prim_id), 1);
